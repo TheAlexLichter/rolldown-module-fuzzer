@@ -38,6 +38,14 @@ export function createGithubAnnotations(
 ) {
   const annotations: GithubAnnotation[] = [];
 
+  for (const warning of result.warnings) {
+    annotations.push({
+      level: "warning",
+      title: `Compat warning: ${result.fixture}`,
+      message: createFailureMessage(result.fixture, warning, metadata, options.repl),
+    });
+  }
+
   for (const bundler of ["rollup", "rolldown"] as const) {
     const outcome = result[bundler];
 

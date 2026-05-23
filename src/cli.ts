@@ -60,6 +60,7 @@ for (const fixture of fixtures) {
   const prefix = result.matches ? "ok" : "fail";
 
   console.log(`${prefix} ${result.fixture}`);
+  for (const warning of result.warnings) console.log(`  warning: ${warning}`);
 
   if (!result.matches) {
     failed = true;
@@ -352,6 +353,7 @@ function createReproMarkdown(
     "",
     "## Result",
     "",
+    ...result.warnings.map((warning) => `- Warning: ${warning}`),
     ...result.differences.map((difference) => `- ${difference}`),
     "",
     "## Local",

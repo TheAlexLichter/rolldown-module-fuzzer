@@ -41,11 +41,13 @@ export type BuildOutcome = BuildOk | BuildError;
 
 export interface CompatResult {
   fixture: string;
+  native: BuildOutcome;
   rollup: BuildOutcome;
   rolldown: BuildOutcome;
   options: CompatOptions;
   matches: boolean;
   differences: string[];
+  warnings: string[];
 }
 
 export interface CompatOptions {
@@ -62,19 +64,22 @@ export async function runCompatFixture(
   try {
     await writeFixture(root, fixture);
 
-    const [rollupOutcome, rolldownOutcome] = await Promise.all([
+    const [nativeOutcome, rollupOutcome, rolldownOutcome] = await Promise.all([
+      executeNative(root, fixture.entry),
       buildWithRollup(root, fixture.entry),
       buildWithRolldown(root, fixture.entry, normalizedOptions),
     ]);
-    const differences = compareOutcomes(rollupOutcome, rolldownOutcome);
+    const comparison = compareOutcomes(nativeOutcome, rollupOutcome, rolldownOutcome);
 
     return {
       fixture: fixture.name,
+      native: nativeOutcome,
       rollup: rollupOutcome,
       rolldown: rolldownOutcome,
       options: normalizedOptions,
-      matches: differences.length === 0,
-      differences,
+      matches: comparison.differences.length === 0,
+      differences: comparison.differences,
+      warnings: comparison.warnings,
     };
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -92,6 +97,19 @@ export async function writeFixture(root: string, fixture: ModuleFixture) {
     const fullPath = join(root, file.path);
     await mkdir(dirname(fullPath), { recursive: true });
     await writeFile(fullPath, file.source);
+  }
+}
+
+async function executeNative(root: string, entry: string): Promise<BuildOutcome> {
+  try {
+    return {
+      status: "ok",
+      warnings: [],
+      exports: await executeModule(root, entry),
+      chunks: [],
+    };
+  } catch (error) {
+    return { status: "error", warnings: [], error: formatError(error) };
   }
 }
 
@@ -175,12 +193,17 @@ async function executeGenerated(root: string, output: readonly GeneratedOutput[]
   const entry = output.find((item) => "code" in item && item.isEntry);
   if (!entry) throw new Error("Generated output did not contain an entry chunk");
 
-  const resultPath = join(root, `${entry.fileName}.exports.json`);
-  const runnerPath = join(root, `${entry.fileName}.runner.mjs`);
+  return executeModule(root, entry.fileName);
+}
+
+async function executeModule(root: string, entryFileName: string) {
+  const resultName = entryFileName.replaceAll("/", "_");
+  const resultPath = join(root, `${resultName}.exports.json`);
+  const runnerPath = join(root, `${resultName}.runner.mjs`);
   await writeFile(runnerPath, createExecutionRunner());
   await execFileAsync(
     process.execPath,
-    [runnerPath, pathToFileURL(join(root, entry.fileName)).href, resultPath],
+    [runnerPath, pathToFileURL(join(root, entryFileName)).href, resultPath],
     {
       timeout: executeGeneratedTimeoutMs,
     },
@@ -203,27 +226,63 @@ function summarizeChunks(output: readonly GeneratedOutput[]): ChunkSummary[] {
     .sort((a, b) => a.fileName.localeCompare(b.fileName));
 }
 
-function compareOutcomes(rollupOutcome: BuildOutcome, rolldownOutcome: BuildOutcome): string[] {
+function compareOutcomes(
+  nativeOutcome: BuildOutcome,
+  rollupOutcome: BuildOutcome,
+  rolldownOutcome: BuildOutcome,
+): { differences: string[]; warnings: string[] } {
   const differences: string[] = [];
+  const warnings: string[] = [];
 
   if (rollupOutcome.status !== rolldownOutcome.status) {
-    differences.push(
+    const message = [
       `status mismatch: rollup=${rollupOutcome.status}, rolldown=${rolldownOutcome.status}`,
-    );
-    return differences;
+      `native=${nativeOutcome.status}`,
+    ].join(", ");
+
+    if (nativeOutcome.status === rolldownOutcome.status)
+      warnings.push(`rollup differs from native and rolldown: ${message}`);
+    else differences.push(message);
+
+    return { differences, warnings };
   }
 
-  if (rollupOutcome.status === "error" && rolldownOutcome.status === "error") return differences;
+  if (rollupOutcome.status === "error" && rolldownOutcome.status === "error") {
+    if (nativeOutcome.status !== rollupOutcome.status)
+      warnings.push(
+        `bundlers differ from native status: native=${nativeOutcome.status}, rollup=${rollupOutcome.status}, rolldown=${rolldownOutcome.status}`,
+      );
+
+    return { differences, warnings };
+  }
 
   if (rollupOutcome.status === "ok" && rolldownOutcome.status === "ok") {
     const rollupExports = stableJson(rollupOutcome.exports);
     const rolldownExports = stableJson(rolldownOutcome.exports);
 
-    if (rollupExports !== rolldownExports)
-      differences.push(`export mismatch: rollup=${rollupExports}, rolldown=${rolldownExports}`);
+    if (rollupExports !== rolldownExports) {
+      const message = `export mismatch: rollup=${rollupExports}, rolldown=${rolldownExports}`;
+      const nativeExports =
+        nativeOutcome.status === "ok" ? stableJson(nativeOutcome.exports) : undefined;
+
+      if (nativeExports === rolldownExports)
+        warnings.push(`rollup differs from native and rolldown: ${message}`);
+      else differences.push(message);
+    } else if (nativeOutcome.status !== rollupOutcome.status) {
+      warnings.push(
+        `bundlers differ from native status: native=${nativeOutcome.status}, rollup=${rollupOutcome.status}, rolldown=${rolldownOutcome.status}`,
+      );
+    } else if (nativeOutcome.status === "ok") {
+      const nativeExports = stableJson(nativeOutcome.exports);
+
+      if (nativeExports !== rollupExports)
+        warnings.push(
+          `bundlers differ from native exports: native=${nativeExports}, rollup=${rollupExports}, rolldown=${rolldownExports}`,
+        );
+    }
   }
 
-  return differences;
+  return { differences, warnings };
 }
 
 function stableJson(value: unknown) {

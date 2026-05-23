@@ -5,9 +5,9 @@
 Seeded differential module-graph tests for Rolldown and Rollup compatibility.
 
 This project generates deterministic ESM fixture graphs, builds each fixture with both Rollup and
-Rolldown, executes the generated ESM entry chunk, and compares the exported primitive values. It is
-intended for finding small, reproducible compatibility gaps in module loading, re-exporting,
-dynamic imports, side effects, and chunk generation behavior.
+Rolldown, executes the native source entry plus each generated ESM entry chunk, and compares the
+exported primitive values. It is intended for finding small, reproducible compatibility gaps in
+module loading, re-exporting, dynamic imports, side effects, and chunk generation behavior.
 
 ## What It Tests
 
@@ -125,6 +125,11 @@ vp pack
 
 The strict execution flag is useful as a diagnostic mode. It asks Rolldown to preserve its execution
 order more strictly, but it is not the same as "match Rollup exactly" for every generated graph.
+
+Each case also runs the original fixture through native Node ESM. If Rollup differs from both native
+Node and Rolldown, the CLI reports a warning instead of failing the case. This keeps native-invalid
+or Rollup-specific tree-shaking behavior visible without treating it as a Rolldown compatibility
+failure.
 
 The CLI automatically uses the `github` reporter when `GITHUB_ACTIONS=true`, emitting workflow
 annotations for compatibility errors and bundler warnings while keeping JSONL artifacts separate via

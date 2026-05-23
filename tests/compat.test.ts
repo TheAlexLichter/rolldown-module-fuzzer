@@ -82,6 +82,46 @@ describe("rollup and rolldown compatibility", () => {
       expect(result.matches).toBe(true);
     });
   }
+
+  test("warns when native and rolldown agree against rollup", async () => {
+    const result = await runCompatFixture({
+      name: "native-invalid-unused-cycle",
+      entry: "entry.js",
+      files: [
+        {
+          path: "entry.js",
+          source: "import value from './m13.js';\nexport const result = value;\n",
+        },
+        {
+          path: "m13.js",
+          source: [
+            "import defaultValue from './m14.js';",
+            "export { v3 as r3 } from './m3.js';",
+            "export const v13 = 26 + defaultValue;",
+            "export default v13;",
+            "",
+          ].join("\n"),
+        },
+        {
+          path: "m3.js",
+          source: "import { v13 } from './m13.js';\nexport const v3 = 16 + v13;\n",
+        },
+        {
+          path: "m14.js",
+          source: "export default 27;\n",
+        },
+      ],
+    });
+
+    expect(result.native.status).toBe("error");
+    expect(result.rollup.status).toBe("ok");
+    expect(result.rolldown.status).toBe("error");
+    expect(result.differences).toEqual([]);
+    expect(result.matches).toBe(true);
+    expect(result.warnings).toEqual([
+      "rollup differs from native and rolldown: status mismatch: rollup=ok, rolldown=error, native=error",
+    ]);
+  });
 });
 
 describe("repl links", () => {
@@ -144,6 +184,12 @@ describe("reporters", () => {
     const annotations = createGithubAnnotations(
       {
         fixture: "dense,star:0",
+        native: {
+          status: "ok",
+          warnings: [],
+          exports: {},
+          chunks: [],
+        },
         rollup: {
           status: "ok",
           warnings: ["rollup warning with percent %\nand newline"],
@@ -160,6 +206,7 @@ describe("reporters", () => {
         },
         matches: false,
         differences: ["status mismatch: rollup=ok, rolldown=error"],
+        warnings: [],
       },
       {
         command: "vp run diff -- --seed 1",
@@ -183,6 +230,12 @@ describe("reporters", () => {
     const annotations = createGithubAnnotations(
       {
         fixture: "fuzz-side-effects",
+        native: {
+          status: "ok",
+          warnings: [],
+          exports: {},
+          chunks: [],
+        },
         rollup: {
           status: "ok",
           warnings: ["side effects in this module were ignored"],
@@ -200,6 +253,7 @@ describe("reporters", () => {
         },
         matches: true,
         differences: [],
+        warnings: [],
       },
       {
         command: "vp run diff -- --fuzz",
@@ -212,10 +266,58 @@ describe("reporters", () => {
     expect(annotations.every((annotation) => !annotation.startsWith("::error"))).toBe(true);
   });
 
+  test("annotates native-backed compat warnings without errors", () => {
+    const annotations = createGithubAnnotations(
+      {
+        fixture: "native-backed-rollup-divergence",
+        native: {
+          status: "error",
+          warnings: [],
+          error: "Cannot access 'v13' before initialization",
+        },
+        rollup: {
+          status: "ok",
+          warnings: [],
+          exports: {},
+          chunks: [],
+        },
+        rolldown: {
+          status: "error",
+          warnings: [],
+          error: "Cannot access 'v13' before initialization",
+        },
+        options: {
+          rolldownStrictExecutionOrder: false,
+        },
+        matches: true,
+        differences: [],
+        warnings: [
+          "rollup differs from native and rolldown: status mismatch: rollup=ok, rolldown=error, native=error",
+        ],
+      },
+      {
+        command: "vp run diff -- --fuzz",
+      },
+    );
+
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]).toContain(
+      "::warning title=Compat warning%3A native-backed-rollup-divergence::",
+    );
+    expect(annotations[0]).toContain("rollup differs from native and rolldown");
+    expect(annotations[0]).not.toContain("::error");
+  });
+
   test("keeps warnings separate from failure annotations", () => {
     const annotations = createGithubAnnotations(
       {
         fixture: "fuzz-side-effects",
+        native: {
+          status: "ok",
+          warnings: [],
+          exports: {},
+          chunks: [],
+        },
         rollup: {
           status: "ok",
           warnings: ["side effects in this module were ignored"],
@@ -233,6 +335,7 @@ describe("reporters", () => {
         },
         matches: false,
         differences: ['export mismatch: rollup={}, rolldown={"value":1}'],
+        warnings: [],
       },
       {
         command: "vp run diff -- --fuzz",
