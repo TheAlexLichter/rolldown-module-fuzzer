@@ -178,4 +178,70 @@ describe("reporters", () => {
     expect(annotations[1]).toContain("status mismatch: rollup=ok, rolldown=error");
     expect(annotations[2]).toContain("title=Rolldown build error%3A dense%2Cstar%3A0");
   });
+
+  test("annotates warning-only matches without errors", () => {
+    const annotations = createGithubAnnotations(
+      {
+        fixture: "fuzz-side-effects",
+        rollup: {
+          status: "ok",
+          warnings: ["side effects in this module were ignored"],
+          exports: {},
+          chunks: [],
+        },
+        rolldown: {
+          status: "ok",
+          warnings: ["side-effect import did not change generated output"],
+          exports: {},
+          chunks: [],
+        },
+        options: {
+          rolldownStrictExecutionOrder: false,
+        },
+        matches: true,
+        differences: [],
+      },
+      {
+        command: "vp run diff -- --fuzz",
+      },
+    );
+
+    expect(annotations).toHaveLength(2);
+    expect(annotations[0]).toContain("::warning title=Rollup warning%3A fuzz-side-effects::");
+    expect(annotations[1]).toContain("::warning title=Rolldown warning%3A fuzz-side-effects::");
+    expect(annotations.every((annotation) => !annotation.startsWith("::error"))).toBe(true);
+  });
+
+  test("keeps warnings separate from failure annotations", () => {
+    const annotations = createGithubAnnotations(
+      {
+        fixture: "fuzz-side-effects",
+        rollup: {
+          status: "ok",
+          warnings: ["side effects in this module were ignored"],
+          exports: {},
+          chunks: [],
+        },
+        rolldown: {
+          status: "ok",
+          warnings: ["other warning"],
+          exports: {},
+          chunks: [],
+        },
+        options: {
+          rolldownStrictExecutionOrder: false,
+        },
+        matches: false,
+        differences: ['export mismatch: rollup={}, rolldown={"value":1}'],
+      },
+      {
+        command: "vp run diff -- --fuzz",
+      },
+    );
+
+    expect(annotations).toHaveLength(3);
+    expect(annotations[0]).toContain("::warning title=Rollup warning%3A fuzz-side-effects::");
+    expect(annotations[1]).toContain("::warning title=Rolldown warning%3A fuzz-side-effects::");
+    expect(annotations[2]).toContain("::error title=Compat mismatch%3A fuzz-side-effects::");
+  });
 });
