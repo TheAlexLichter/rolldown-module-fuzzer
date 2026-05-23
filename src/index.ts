@@ -35,3 +35,25 @@ export {
   type CompatResult,
   type SerializableNamespace,
 } from "./diff.ts";
+
+export {
+  createReplLinks,
+  createRolldownReplUrl,
+  createRollupReplUrl,
+  decodeRolldownHashState,
+  decodeRollupShareableState,
+  defaultMaxReplUrlLength,
+  replContractSources,
+  type OmittedReplLink,
+  type ReplContractSource,
+  type ReplLink,
+  type ReplLinkOptions,
+  type ReplLinks,
+} from "./repl.ts";
+
+export {
+  checkReplContracts,
+  type ReplContractCheckMismatch,
+  type ReplContractCheckOk,
+  type ReplContractCheckResult,
+} from "./repl-contract.ts";

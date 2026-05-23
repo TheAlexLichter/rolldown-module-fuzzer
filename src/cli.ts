@@ -1,12 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createAllFixtures, createFixture, type FixtureFamily } from "./fixtures.ts";
 import { normalizeModulePathKinds, type FuzzFixtureOptions } from "./fuzzer.ts";
 import { allModulePathKinds } from "./module-helpers.ts";
+import { createReplLinks, type ReplLinks } from "./repl.ts";
 import { runCompatFixture, writeFixture, type CompatResult } from "./diff.ts";
 import type { ModuleFixture } from "./fixtures.ts";
 
 const families: FixtureFamily[] = ["dense-star", "fanout-chain", "cyclic-reexport", "fuzz"];
+const packageJson = readPackageJson();
 
 interface CliOptions {
   family: FixtureFamily | "all";
@@ -35,6 +38,7 @@ let failed = false;
 
 for (const fixture of fixtures) {
   const result = await runCompatFixture(fixture);
+  const replLinks = result.matches ? undefined : createFailureReplLinks(fixture);
   const prefix = result.matches ? "ok" : "fail";
 
   console.log(`${prefix} ${result.fixture}`);
@@ -42,15 +46,16 @@ for (const fixture of fixtures) {
   if (!result.matches) {
     failed = true;
     for (const difference of result.differences) console.log(`  ${difference}`);
+    printReplLinks(replLinks);
 
     if (options.outDir) {
       const fixtureDir = join(options.outDir, result.fixture);
-      await writeFailure(fixtureDir, fixture, result);
+      await writeFailure(fixtureDir, fixture, result, replLinks);
       console.log(`  wrote fixture to ${fixtureDir}`);
     }
   }
 
-  if (options.report) await appendReportLine(options.report, result);
+  if (options.report) await appendReportLine(options.report, { ...result, repl: replLinks });
 
   if (!result.matches && !options.continueOnFail) break;
 }
@@ -152,13 +157,22 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-async function writeFailure(fixtureDir: string, fixture: ModuleFixture, result: CompatResult) {
+async function writeFailure(
+  fixtureDir: string,
+  fixture: ModuleFixture,
+  result: CompatResult,
+  replLinks: ReplLinks | undefined,
+) {
   await writeFixture(fixtureDir, fixture);
   await mkdir(fixtureDir, { recursive: true });
-  await writeFile(`${fixtureDir}/result.json`, `${JSON.stringify(result, null, 2)}\n`);
+  await writeFile(
+    `${fixtureDir}/result.json`,
+    `${JSON.stringify({ ...result, repl: replLinks }, null, 2)}\n`,
+  );
+  await writeFile(`${fixtureDir}/REPRO.md`, createReproMarkdown(result, replLinks));
 }
 
-async function appendReportLine(reportPath: string, result: CompatResult) {
+async function appendReportLine(reportPath: string, result: CompatResult & { repl?: ReplLinks }) {
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(result)}\n`, { flag: "a" });
 }
@@ -201,4 +215,71 @@ Options:
 Path kinds:
   ${allModulePathKinds.join(", ")}
 `);
+}
+
+function createFailureReplLinks(fixture: ModuleFixture) {
+  return createReplLinks(fixture, {
+    rollupVersion: packageVersion("rollup"),
+    rolldownVersion: packageVersion("rolldown"),
+  });
+}
+
+function printReplLinks(replLinks: ReplLinks | undefined) {
+  if (!replLinks) return;
+
+  printReplLink("rollup", replLinks.rollup);
+  printReplLink("rolldown", replLinks.rolldown);
+}
+
+function printReplLink(name: string, link: ReplLinks["rollup"]) {
+  if (link.status === "ok") {
+    console.log(`  ${name} repl: ${link.url}`);
+    return;
+  }
+
+  console.log(`  ${name} repl: omitted (${link.reason})`);
+}
+
+function createReproMarkdown(result: CompatResult, replLinks: ReplLinks | undefined) {
+  const lines = [
+    `# ${result.fixture}`,
+    "",
+    "## Result",
+    "",
+    ...result.differences.map((difference) => `- ${difference}`),
+    "",
+    "## Online REPLs",
+    "",
+    formatMarkdownReplLink("Rollup", replLinks?.rollup),
+    formatMarkdownReplLink("Rolldown", replLinks?.rolldown),
+    "",
+    "The local fixture files in this directory are the canonical reproduction. The REPLs use the",
+    "browser-hosted bundler builds and are intended for triage and issue reports.",
+    "",
+  ];
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatMarkdownReplLink(label: string, link: ReplLinks["rollup"] | undefined) {
+  if (!link) return `- ${label}: unavailable`;
+  if (link.status === "ok") return `- ${label}: ${link.url}`;
+
+  return `- ${label}: omitted (${link.reason})`;
+}
+
+function packageVersion(name: "rolldown" | "rollup") {
+  return (
+    packageJson.inlinedDependencies?.[name] ??
+    packageJson.devDependencies?.[name]?.replace(/^[^\d]*/, "")
+  );
+}
+
+function readPackageJson() {
+  const require = createRequire(import.meta.url);
+
+  return require("../package.json") as {
+    devDependencies?: Partial<Record<"rolldown" | "rollup", string>>;
+    inlinedDependencies?: Partial<Record<"rolldown" | "rollup", string>>;
+  };
 }

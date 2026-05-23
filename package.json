@@ -18,6 +18,7 @@
     "diff": "vp exec node src/cli.ts",
     "diff:fuzz": "vp run diff -- --fuzz --seed 0 --cases 25 --max-width 6 --max-depth 8 --paths static,namespace,dynamic,default,named-reexport,star-reexport",
     "diff:smoke": "vp run diff -- --family all --seeds 1",
+    "check:repl-contract": "vp exec node src/repl-contract.ts",
     "test": "vp test",
     "check": "vp check",
     "prepublishOnly": "vp run build",
