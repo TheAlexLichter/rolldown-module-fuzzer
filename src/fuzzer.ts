@@ -11,6 +11,7 @@ export interface FuzzFixtureOptions {
   seed: number;
   maxWidth: number;
   maxDepth: number;
+  cycles?: boolean;
   paths?: readonly ModulePathKind[];
 }
 
@@ -31,13 +32,19 @@ export function createFuzzFixture(options: FuzzFixtureOptions): ModuleFixture {
   const normalized = normalizeFuzzOptions(options);
   const rng = new Rng(normalized.seed);
   const nodes = createNodes(rng, normalized.maxWidth, normalized.maxDepth);
-  const edges = createEdges(rng, nodes, normalized.paths);
+  const edges = createEdges(rng, nodes, normalized.paths, normalized.cycles);
   const files = createFiles(normalized.seed, nodes, edges);
 
   files.push(createEntryFile(nodes, normalized.seed, normalized.paths));
 
   return {
-    name: `fuzz-${normalized.seed}-w${normalized.maxWidth}-d${normalized.maxDepth}-${normalized.paths.join("+")}`,
+    name: [
+      `fuzz-${normalized.seed}`,
+      `w${normalized.maxWidth}`,
+      `d${normalized.maxDepth}`,
+      normalized.cycles ? "cycles" : "dag",
+      normalized.paths.join("+"),
+    ].join("-"),
     entry: "entry.js",
     files,
   };
@@ -74,6 +81,7 @@ function normalizeFuzzOptions(options: FuzzFixtureOptions): Required<FuzzFixture
     seed: options.seed,
     maxWidth: options.maxWidth,
     maxDepth: options.maxDepth,
+    cycles: options.cycles ?? true,
     paths: options.paths?.length ? [...options.paths] : allModulePathKinds,
   };
 }
@@ -99,7 +107,12 @@ function createNodes(rng: Rng, maxWidth: number, maxDepth: number): GraphNode[] 
   return nodes;
 }
 
-function createEdges(rng: Rng, nodes: GraphNode[], paths: readonly ModulePathKind[]): GraphEdge[] {
+function createEdges(
+  rng: Rng,
+  nodes: GraphNode[],
+  paths: readonly ModulePathKind[],
+  cycles: boolean,
+): GraphEdge[] {
   const edges: GraphEdge[] = [];
   const byDepth = groupByDepth(nodes);
 
@@ -122,7 +135,32 @@ function createEdges(rng: Rng, nodes: GraphNode[], paths: readonly ModulePathKin
     }
   }
 
+  if (cycles) addCycleEdges(rng, edges, paths);
+
   return edges;
+}
+
+function addCycleEdges(rng: Rng, edges: GraphEdge[], paths: readonly ModulePathKind[]) {
+  const cyclePaths = paths.filter(isCyclePathKind);
+  if (cyclePaths.length === 0) return;
+
+  const candidates = edges.filter((edge) => edge.from.depth < edge.to.depth);
+  if (candidates.length === 0) return;
+
+  const count = rng.integer(1, Math.min(3, candidates.length));
+
+  for (const edge of rng.sample(candidates, count)) {
+    const from = edge.to;
+    const to = edge.from;
+
+    if (edges.some((existing) => existing.from === from && existing.to === to)) continue;
+
+    edges.push({
+      from,
+      to,
+      kind: rng.choice(cyclePaths),
+    });
+  }
 }
 
 function createFiles(
@@ -250,4 +288,8 @@ function groupByDepth(nodes: readonly GraphNode[]) {
 
 function isModulePathKind(value: string): value is ModulePathKind {
   return allModulePathKinds.includes(value as ModulePathKind);
+}
+
+function isCyclePathKind(value: ModulePathKind) {
+  return value === "named-reexport" || value === "side-effect" || value === "star-reexport";
 }

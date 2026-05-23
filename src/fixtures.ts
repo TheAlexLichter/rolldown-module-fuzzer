@@ -23,6 +23,7 @@ export function createFixture({ family, seed, fuzz }: GraphSeed): ModuleFixture 
       seed,
       maxWidth: fuzz?.maxWidth ?? 4,
       maxDepth: fuzz?.maxDepth ?? 4,
+      cycles: fuzz?.cycles,
       paths: fuzz?.paths,
     });
 

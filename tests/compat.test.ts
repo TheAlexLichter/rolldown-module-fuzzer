@@ -35,6 +35,34 @@ describe("fixture generation", () => {
 
     expect(createFuzzFixture(options)).toEqual(createFuzzFixture(options));
   });
+
+  test("can add cycle back-edges to fuzz fixtures", () => {
+    const fixture = createFuzzFixture({
+      seed: 0,
+      maxWidth: 1,
+      maxDepth: 2,
+      cycles: true,
+      paths: ["star-reexport"],
+    });
+    const leaf = fixture.files.find((file) => file.path === "d1/m1.js");
+
+    expect(fixture.name).toContain("-cycles-");
+    expect(leaf?.source).toContain("export * from '../d0/m0.js';");
+  });
+
+  test("can keep fuzz fixtures acyclic", () => {
+    const fixture = createFuzzFixture({
+      seed: 0,
+      maxWidth: 1,
+      maxDepth: 2,
+      cycles: false,
+      paths: ["star-reexport"],
+    });
+    const leaf = fixture.files.find((file) => file.path === "d1/m1.js");
+
+    expect(fixture.name).toContain("-dag-");
+    expect(leaf?.source).not.toContain("export * from '../d0/m0.js';");
+  });
 });
 
 describe("rollup and rolldown compatibility", () => {

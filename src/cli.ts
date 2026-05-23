@@ -99,6 +99,7 @@ function parseArgs(args: string[]): CliOptions {
     fuzz: {
       maxWidth: 4,
       maxDepth: 4,
+      cycles: true,
       paths: allModulePathKinds,
     },
   };
@@ -148,6 +149,16 @@ function parseArgs(args: string[]): CliOptions {
 
     if (arg === "--paths") {
       options.fuzz.paths = normalizeModulePathKinds(args[++index]);
+      continue;
+    }
+
+    if (arg === "--cycles") {
+      options.fuzz.cycles = true;
+      continue;
+    }
+
+    if (arg === "--no-cycles") {
+      options.fuzz.cycles = false;
       continue;
     }
 
@@ -252,6 +263,8 @@ Options:
   --cases <count>      Number of fuzz cases to run when --family fuzz is active (default: 1)
   --max-width <count>  Fuzz graph maximum modules per layer (default: 4)
   --max-depth <count>  Fuzz graph maximum layer count (default: 4)
+  --cycles             Allow fuzz back-edges that form module cycles (default)
+  --no-cycles          Keep fuzz graphs acyclic
   --paths <list>       Comma-separated fuzz paths, or "all" (default: all)
   --out-dir <dir>      Write failing generated fixtures and result metadata
   --report <file>      Append one JSON object per case to a JSONL report

@@ -27,6 +27,10 @@ The fuzzer can combine these module path kinds:
 - `star-reexport`: star re-exports
 - `side-effect`: side-effect-only imports
 
+By default, fuzzing also adds a small number of back-edges when the selected path kinds include
+cycle-safe edges (`named-reexport`, `star-reexport`, or `side-effect`). Use `--no-cycles` to keep
+generated fuzz graphs acyclic.
+
 ## Requirements
 
 This repo uses Vite+, exposed through the global `vp` CLI. Vite+ manages the runtime, package
@@ -62,6 +66,12 @@ Restrict fuzzing to specific path kinds:
 
 ```bash
 vp run diff -- --fuzz --seed 1234 --cases 20 --paths static,dynamic,star-reexport
+```
+
+Run acyclic fuzzing:
+
+```bash
+vp run diff -- --fuzz --no-cycles --seed 1234 --cases 20 --paths static,dynamic,star-reexport
 ```
 
 Write failing fixtures, result metadata, and REPL repro links:
@@ -101,6 +111,8 @@ vp pack
 --cases <count>      Number of fuzz cases to run when --family fuzz is active
 --max-width <count>  Fuzz graph maximum modules per layer
 --max-depth <count>  Fuzz graph maximum layer count
+--cycles             Allow fuzz back-edges that form module cycles (default)
+--no-cycles          Keep fuzz graphs acyclic
 --paths <list>       Comma-separated path kinds, or all
 --out-dir <dir>      Write failing generated fixtures and result metadata
 --report <file>      Append one JSON object per case to a JSONL report
