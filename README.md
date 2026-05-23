@@ -17,6 +17,10 @@ The fixed fixture families are inspired by module-loader stress cases:
 - `fanout-chain`: wide fan-out onto a long import chain
 - `cyclic-reexport`: cyclic named re-exports
 
+The fuzzer can combine ESM `.js` and CommonJS `.cjs` modules. CommonJS modules are currently
+generated as leaf modules so cases stay executable in native Node while still exercising interop
+through ESM imports, re-exports, dynamic imports, and side-effect imports.
+
 The fuzzer can combine these module path kinds:
 
 - `static`: named static imports
@@ -68,6 +72,12 @@ Restrict fuzzing to specific path kinds:
 vp run diff -- --fuzz --seed 1234 --cases 20 --paths static,dynamic,star-reexport
 ```
 
+Run mixed ESM/CommonJS fuzzing:
+
+```bash
+vp run diff -- --fuzz --seed 1234 --cases 20 --formats esm,cjs
+```
+
 Run acyclic fuzzing:
 
 ```bash
@@ -114,6 +124,7 @@ vp pack
 --cycles             Allow fuzz back-edges that form module cycles (default)
 --no-cycles          Keep fuzz graphs acyclic
 --paths <list>       Comma-separated path kinds, or all
+--formats <list>     Comma-separated module formats: esm, cjs, or all (default: esm)
 --out-dir <dir>      Write failing generated fixtures and result metadata
 --report <file>      Append one JSON object per case to a JSONL report
 --reporter <format>  Console reporter: text | github

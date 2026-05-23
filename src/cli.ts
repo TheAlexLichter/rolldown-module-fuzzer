@@ -2,8 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createAllFixtures, createFixture, type FixtureFamily } from "./fixtures.ts";
-import { normalizeModulePathKinds, type FuzzFixtureOptions } from "./fuzzer.ts";
-import { allModulePathKinds } from "./module-helpers.ts";
+import {
+  normalizeModuleFormats,
+  normalizeModulePathKinds,
+  type FuzzFixtureOptions,
+} from "./fuzzer.ts";
+import { allModuleFormats, allModulePathKinds } from "./module-helpers.ts";
 import { createReplLinks, type ReplLinks } from "./repl.ts";
 import {
   createGithubAnnotations,
@@ -101,6 +105,7 @@ function parseArgs(args: string[]): CliOptions {
       maxWidth: 4,
       maxDepth: 4,
       cycles: true,
+      formats: ["esm"],
       paths: allModulePathKinds,
     },
   };
@@ -150,6 +155,11 @@ function parseArgs(args: string[]): CliOptions {
 
     if (arg === "--paths") {
       options.fuzz.paths = normalizeModulePathKinds(args[++index]);
+      continue;
+    }
+
+    if (arg === "--formats") {
+      options.fuzz.formats = normalizeModuleFormats(args[++index]);
       continue;
     }
 
@@ -267,6 +277,7 @@ Options:
   --cycles             Allow fuzz back-edges that form module cycles (default)
   --no-cycles          Keep fuzz graphs acyclic
   --paths <list>       Comma-separated fuzz paths, or "all" (default: all)
+  --formats <list>     Comma-separated module formats, or "all" (default: esm)
   --out-dir <dir>      Write failing generated fixtures and result metadata
   --report <file>      Append one JSON object per case to a JSONL report
   --reporter <format>  Console reporter: ${reporterFormats.join(" | ")} (default: github in GitHub Actions, otherwise text)
@@ -277,6 +288,9 @@ Options:
 
 Path kinds:
   ${allModulePathKinds.join(", ")}
+
+Module formats:
+  ${allModuleFormats.join(", ")}
 `);
 }
 

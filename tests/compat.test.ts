@@ -42,6 +42,7 @@ describe("fixture generation", () => {
       maxWidth: 1,
       maxDepth: 2,
       cycles: true,
+      formats: ["esm"],
       paths: ["star-reexport"],
     });
     const leaf = fixture.files.find((file) => file.path === "d1/m1.js");
@@ -56,12 +57,32 @@ describe("fixture generation", () => {
       maxWidth: 1,
       maxDepth: 2,
       cycles: false,
+      formats: ["esm"],
       paths: ["star-reexport"],
     });
     const leaf = fixture.files.find((file) => file.path === "d1/m1.js");
 
     expect(fixture.name).toContain("-dag-");
     expect(leaf?.source).not.toContain("export * from '../d0/m0.js';");
+  });
+
+  test("can generate CommonJS leaf modules", () => {
+    const fixture = createFuzzFixture({
+      seed: 0,
+      maxWidth: 1,
+      maxDepth: 2,
+      cycles: false,
+      formats: ["cjs"],
+      paths: ["static"],
+    });
+
+    expect(fixture.name).toContain("-cjs-");
+    expect(fixture.files.find((file) => file.path === "d0/m0.cjs")?.source).toContain(
+      "exports.v0 = v0;",
+    );
+    expect(fixture.files.find((file) => file.path === "entry.js")?.source).toContain(
+      "import { v0 as rootValue0 } from './d0/m0.cjs';",
+    );
   });
 });
 

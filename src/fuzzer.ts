@@ -1,7 +1,9 @@
 import {
   ModuleBuilder,
+  allModuleFormats,
   allModulePathKinds,
   relativeSpecifier,
+  type ModuleFormat,
   type ModulePathKind,
 } from "./module-helpers.ts";
 import { Rng } from "./rng.ts";
@@ -12,12 +14,14 @@ export interface FuzzFixtureOptions {
   maxWidth: number;
   maxDepth: number;
   cycles?: boolean;
+  formats?: readonly ModuleFormat[];
   paths?: readonly ModulePathKind[];
 }
 
 interface GraphNode {
   id: number;
   depth: number;
+  format: ModuleFormat;
   path: string;
   valueExport: string;
 }
@@ -31,7 +35,7 @@ interface GraphEdge {
 export function createFuzzFixture(options: FuzzFixtureOptions): ModuleFixture {
   const normalized = normalizeFuzzOptions(options);
   const rng = new Rng(normalized.seed);
-  const nodes = createNodes(rng, normalized.maxWidth, normalized.maxDepth);
+  const nodes = createNodes(rng, normalized.maxWidth, normalized.maxDepth, normalized.formats);
   const edges = createEdges(rng, nodes, normalized.paths, normalized.cycles);
   const files = createFiles(normalized.seed, nodes, edges);
 
@@ -43,6 +47,7 @@ export function createFuzzFixture(options: FuzzFixtureOptions): ModuleFixture {
       `w${normalized.maxWidth}`,
       `d${normalized.maxDepth}`,
       normalized.cycles ? "cycles" : "dag",
+      normalized.formats.join("+"),
       normalized.paths.join("+"),
     ].join("-"),
     entry: "entry.js",
@@ -68,6 +73,22 @@ export function normalizeModulePathKinds(value: string | undefined): ModulePathK
   return [...new Set(paths)] as ModulePathKind[];
 }
 
+export function normalizeModuleFormats(value: string | undefined): ModuleFormat[] {
+  if (!value || value === "all") return allModuleFormats;
+
+  const formats = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const format of formats) {
+    if (!isModuleFormat(format))
+      throw new Error(`Unknown module format "${format}". Expected one of: all, esm, cjs`);
+  }
+
+  return [...new Set(formats)] as ModuleFormat[];
+}
+
 function normalizeFuzzOptions(options: FuzzFixtureOptions): Required<FuzzFixtureOptions> {
   if (!Number.isInteger(options.seed)) throw new Error("seed must be an integer");
 
@@ -82,11 +103,17 @@ function normalizeFuzzOptions(options: FuzzFixtureOptions): Required<FuzzFixture
     maxWidth: options.maxWidth,
     maxDepth: options.maxDepth,
     cycles: options.cycles ?? true,
+    formats: options.formats?.length ? [...options.formats] : ["esm"],
     paths: options.paths?.length ? [...options.paths] : allModulePathKinds,
   };
 }
 
-function createNodes(rng: Rng, maxWidth: number, maxDepth: number): GraphNode[] {
+function createNodes(
+  rng: Rng,
+  maxWidth: number,
+  maxDepth: number,
+  formats: readonly ModuleFormat[],
+): GraphNode[] {
   const nodes: GraphNode[] = [];
   let id = 0;
 
@@ -94,10 +121,13 @@ function createNodes(rng: Rng, maxWidth: number, maxDepth: number): GraphNode[] 
     const width = rng.integer(1, maxWidth);
 
     for (let index = 0; index < width; index++) {
+      const format = chooseModuleFormat(rng, formats);
+
       nodes.push({
         id,
         depth,
-        path: `d${depth}/m${id}.js`,
+        format,
+        path: `d${depth}/m${id}.${format === "cjs" ? "cjs" : "js"}`,
         valueExport: `v${id}`,
       });
       id++;
@@ -117,6 +147,8 @@ function createEdges(
   const byDepth = groupByDepth(nodes);
 
   for (const from of nodes) {
+    if (from.format === "cjs") continue;
+
     const candidates = nodes.filter((node) => node.depth > from.depth);
     if (candidates.length === 0) continue;
 
@@ -150,6 +182,8 @@ function addCycleEdges(rng: Rng, edges: GraphEdge[], paths: readonly ModulePathK
   const count = rng.integer(1, Math.min(3, candidates.length));
 
   for (const edge of rng.sample(candidates, count)) {
+    if (edge.to.format === "cjs") continue;
+
     const from = edge.to;
     const to = edge.from;
 
@@ -169,6 +203,14 @@ function createFiles(
   edges: readonly GraphEdge[],
 ): FixtureFile[] {
   return nodes.map((node) => {
+    if (node.format === "cjs") {
+      return createCjsFile(
+        seed,
+        node,
+        edges.some((edge) => edge.to === node && edge.kind === "side-effect"),
+      );
+    }
+
     const builder = new ModuleBuilder({
       id: node.id,
       path: node.path,
@@ -182,7 +224,11 @@ function createFiles(
       const exportName = `r${edge.to.id}_${index}`;
 
       if (edge.kind === "default") {
-        builder.addDefaultImport(specifier, exportName);
+        builder.addDefaultImport(
+          specifier,
+          exportName,
+          edge.to.format === "cjs" ? "default" : undefined,
+        );
         continue;
       }
 
@@ -222,6 +268,26 @@ function createFiles(
   });
 }
 
+function createCjsFile(seed: number, node: GraphNode, includeSideEffect: boolean): FixtureFile {
+  const value = seed + node.id + 1;
+  const lines = [];
+
+  if (includeSideEffect)
+    lines.push("globalThis.__compatLog ??= [];", `globalThis.__compatLog.push('m${node.id}');`);
+
+  lines.push(
+    `const ${node.valueExport} = ${value};`,
+    `exports.${node.valueExport} = ${node.valueExport};`,
+    `exports.default = ${node.valueExport};`,
+    "",
+  );
+
+  return {
+    path: node.path,
+    source: lines.join("\n"),
+  };
+}
+
 function createEntryFile(
   nodes: readonly GraphNode[],
   seed: number,
@@ -244,7 +310,7 @@ function createEntryFile(
     if (paths.includes("default") && index % 3 === 2) {
       const local = `rootDefault${index}`;
       imports.push(`import ${local} from '${specifier}';`);
-      terms.push(local);
+      terms.push(node.format === "cjs" ? `${local}.default` : local);
       continue;
     }
 
@@ -290,6 +356,17 @@ function isModulePathKind(value: string): value is ModulePathKind {
   return allModulePathKinds.includes(value as ModulePathKind);
 }
 
+function isModuleFormat(value: string): value is ModuleFormat {
+  return allModuleFormats.includes(value as ModuleFormat);
+}
+
 function isCyclePathKind(value: ModulePathKind) {
   return value === "named-reexport" || value === "side-effect" || value === "star-reexport";
+}
+
+function chooseModuleFormat(rng: Rng, formats: readonly ModuleFormat[]) {
+  if (formats.length === 0) throw new Error("formats must contain at least one module format");
+  if (formats.length === 1) return formats[0]!;
+
+  return rng.choice(formats);
 }

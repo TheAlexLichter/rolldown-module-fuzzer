@@ -24,6 +24,7 @@ export function createFixture({ family, seed, fuzz }: GraphSeed): ModuleFixture 
       maxWidth: fuzz?.maxWidth ?? 4,
       maxDepth: fuzz?.maxDepth ?? 4,
       cycles: fuzz?.cycles,
+      formats: fuzz?.formats,
       paths: fuzz?.paths,
     });
 

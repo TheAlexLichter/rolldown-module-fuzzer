@@ -7,6 +7,10 @@ export type ModulePathKind =
   | "star-reexport"
   | "static";
 
+export type ModuleFormat = "cjs" | "esm";
+
+export const allModuleFormats: ModuleFormat[] = ["esm", "cjs"];
+
 export const allModulePathKinds: ModulePathKind[] = [
   "static",
   "namespace",
@@ -48,11 +52,12 @@ export class ModuleBuilder {
       this.#lines.push("globalThis.__compatLog ??= [];", `globalThis.__compatLog.push('m${id}');`);
   }
 
-  addDefaultImport(specifier: string, exportName: string) {
+  addDefaultImport(specifier: string, exportName: string, member?: string) {
     const local = this.#temporary("defaultValue");
+    const expression = member ? `${local}.${member}` : local;
     this.#lines.push(`import ${local} from '${specifier}';`);
-    this.#terms.push(local);
-    this.#lines.push(`export const ${exportName} = ${local};`);
+    this.#terms.push(expression);
+    this.#lines.push(`export const ${exportName} = ${expression};`);
   }
 
   addDynamicImport(specifier: string, importedName: string, exportName: string) {

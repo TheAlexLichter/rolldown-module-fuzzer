@@ -7,9 +7,11 @@ import { promisify } from "node:util";
 import { rolldown } from "rolldown";
 import { rollup } from "rollup";
 import type { ModuleFixture } from "./fixtures.ts";
+import type { Plugin } from "rollup";
 
 const execFileAsync = promisify(execFile);
 const executeGeneratedTimeoutMs = 10_000;
+const commonjs = (await import("@rollup/plugin-commonjs")).default as unknown as () => Plugin;
 
 export interface SerializableNamespace {
   [name: string]: null | number | string | boolean;
@@ -123,6 +125,7 @@ async function buildWithRollup(root: string, entry: string): Promise<BuildOutcom
       onwarn(warning) {
         warnings.push(formatWarning(warning));
       },
+      plugins: [commonjs()],
       treeshake: true,
     });
     const generated = await bundle.generate({

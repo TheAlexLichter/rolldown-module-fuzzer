@@ -11,17 +11,24 @@ export {
 } from "./fixtures.ts";
 
 export {
+  allModuleFormats,
   allModulePathKinds,
   defaultExportName,
   ModuleBuilder,
   relativeSpecifier,
   valueExportName,
   type BuiltModule,
+  type ModuleFormat,
   type ModuleBuilderOptions,
   type ModulePathKind,
 } from "./module-helpers.ts";
 
-export { createFuzzFixture, normalizeModulePathKinds, type FuzzFixtureOptions } from "./fuzzer.ts";
+export {
+  createFuzzFixture,
+  normalizeModuleFormats,
+  normalizeModulePathKinds,
+  type FuzzFixtureOptions,
+} from "./fuzzer.ts";
 
 export { Rng } from "./rng.ts";
 
