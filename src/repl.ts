@@ -21,6 +21,7 @@ export interface ReplLinks {
 export interface ReplLinkOptions {
   rollupVersion?: string;
   rolldownVersion?: string;
+  rolldownStrictExecutionOrder?: boolean;
   maxUrlLength?: number;
 }
 
@@ -119,10 +120,13 @@ export function createRollupReplUrl(fixture: ModuleFixture, options: ReplLinkOpt
 }
 
 export function createRolldownReplUrl(fixture: ModuleFixture, options: ReplLinkOptions = {}) {
+  const files = options.rolldownStrictExecutionOrder
+    ? [...fixture.files, createRolldownStrictExecutionConfig()]
+    : fixture.files;
   const state: RolldownReplState = {
     v: options.rolldownVersion ?? "latest",
     f: Object.fromEntries(
-      fixture.files.map((file) => [
+      files.map((file) => [
         file.path,
         {
           n: file.path,
@@ -134,6 +138,24 @@ export function createRolldownReplUrl(fixture: ModuleFixture, options: ReplLinkO
   };
 
   return `https://repl.rolldown.rs/#${encodeRolldownHashState(state)}`;
+}
+
+function createRolldownStrictExecutionConfig() {
+  return {
+    path: "rolldown.config.ts",
+    source: [
+      "import { defineConfig } from 'rolldown';",
+      "",
+      "export default defineConfig({",
+      "  input: import.meta.input,",
+      "  output: {",
+      "    format: 'esm',",
+      "    strictExecutionOrder: true,",
+      "  },",
+      "});",
+      "",
+    ].join("\n"),
+  };
 }
 
 export function decodeRollupShareableState(shareable: string): RollupReplState {

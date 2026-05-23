@@ -104,18 +104,32 @@ vp pack
 --paths <list>       Comma-separated path kinds, or all
 --out-dir <dir>      Write failing generated fixtures and result metadata
 --report <file>      Append one JSON object per case to a JSONL report
+--reporter <format>  Console reporter: text | github
+--rolldown-strict-execution-order
+                     Run Rolldown with output.strictExecutionOrder enabled
 --continue-on-fail   Keep running after differences
 --stop-on-fail       Stop after the first difference
 ```
+
+The strict execution flag is useful as a diagnostic mode. It asks Rolldown to preserve its execution
+order more strictly, but it is not the same as "match Rollup exactly" for every generated graph.
+
+The CLI automatically uses the `github` reporter when `GITHUB_ACTIONS=true`, emitting workflow
+annotations for compatibility errors and bundler warnings while keeping JSONL artifacts separate via
+`--report`. Use `--reporter text` or `--reporter github` to override auto-detection.
 
 ## Failure Reproduction
 
 The most reliable reproduction is always the generated fixture written by `--out-dir`. Each failed
 fixture directory contains the generated source files, `result.json`, and `REPRO.md`.
 
-`result.json` includes both bundler outcomes, normalized exports, differences, and REPL link
-metadata. `REPRO.md` includes Rollup and Rolldown REPL links when the encoded URL is short enough
-to be usable. Large fixtures keep the local files as the canonical repro and omit oversized links.
+`result.json` includes both bundler outcomes, normalized exports, differences, the original command
+arguments, Rollup and Rolldown package versions, and REPL link metadata. `REPRO.md` includes the
+local command plus Rollup and Rolldown REPL links when the encoded URL is short enough to be usable.
+Large fixtures keep the local files as the canonical repro and omit oversized links.
+
+When `--rolldown-strict-execution-order` is enabled, generated Rolldown REPL links include a
+`rolldown.config.ts` file with `output.strictExecutionOrder: true`.
 
 The REPL links are useful for triage and issue reports, but they should not replace the local repro:
 online REPLs run browser-hosted bundler builds and can drift from the exact package versions used
@@ -184,6 +198,22 @@ Common entry points:
 - `writeFixture`
 - `createReplLinks`
 - `checkReplContracts`
+
+## Publishing
+
+Publishing can be useful if this becomes shared infrastructure for Rolldown, Rollup, or downstream
+compatibility CI. Until then, keeping it private is simpler because the repo already has exact
+dependency versions and Vite+ scripts.
+
+Consider publishing when at least one of these is true:
+
+- another repo needs to import the fixture/fuzzer API
+- CI wants to run the CLI via a pinned package version instead of checking out this repo
+- failures should cite a stable package version in external bug reports
+
+If published, keep Rollup and Rolldown as explicit dependencies or peer dependencies with a clear
+compatibility policy. For differential testing, pinning exact versions in CI is usually better than
+allowing broad semver ranges.
 
 ## Development Notes
 

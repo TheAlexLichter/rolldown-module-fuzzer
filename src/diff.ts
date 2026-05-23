@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { rolldown } from "rolldown";
 import { rollup } from "rollup";
 import type { ModuleFixture } from "./fixtures.ts";
+
+const execFileAsync = promisify(execFile);
+const executeGeneratedTimeoutMs = 10_000;
 
 export interface SerializableNamespace {
   [name: string]: null | number | string | boolean;
@@ -38,11 +43,20 @@ export interface CompatResult {
   fixture: string;
   rollup: BuildOutcome;
   rolldown: BuildOutcome;
+  options: CompatOptions;
   matches: boolean;
   differences: string[];
 }
 
-export async function runCompatFixture(fixture: ModuleFixture): Promise<CompatResult> {
+export interface CompatOptions {
+  rolldownStrictExecutionOrder: boolean;
+}
+
+export async function runCompatFixture(
+  fixture: ModuleFixture,
+  options: Partial<CompatOptions> = {},
+): Promise<CompatResult> {
+  const normalizedOptions = normalizeCompatOptions(options);
   const root = await mkdtemp(join(tmpdir(), "rolldown-rollup-compat-"));
 
   try {
@@ -50,7 +64,7 @@ export async function runCompatFixture(fixture: ModuleFixture): Promise<CompatRe
 
     const [rollupOutcome, rolldownOutcome] = await Promise.all([
       buildWithRollup(root, fixture.entry),
-      buildWithRolldown(root, fixture.entry),
+      buildWithRolldown(root, fixture.entry, normalizedOptions),
     ]);
     const differences = compareOutcomes(rollupOutcome, rolldownOutcome);
 
@@ -58,12 +72,19 @@ export async function runCompatFixture(fixture: ModuleFixture): Promise<CompatRe
       fixture: fixture.name,
       rollup: rollupOutcome,
       rolldown: rolldownOutcome,
+      options: normalizedOptions,
       matches: differences.length === 0,
       differences,
     };
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+}
+
+function normalizeCompatOptions(options: Partial<CompatOptions>): CompatOptions {
+  return {
+    rolldownStrictExecutionOrder: options.rolldownStrictExecutionOrder ?? false,
+  };
 }
 
 export async function writeFixture(root: string, fixture: ModuleFixture) {
@@ -105,7 +126,11 @@ async function buildWithRollup(root: string, entry: string): Promise<BuildOutcom
   }
 }
 
-async function buildWithRolldown(root: string, entry: string): Promise<BuildOutcome> {
+async function buildWithRolldown(
+  root: string,
+  entry: string,
+  options: CompatOptions,
+): Promise<BuildOutcome> {
   const warnings: string[] = [];
   let bundle: Awaited<ReturnType<typeof rolldown>> | undefined;
 
@@ -121,6 +146,7 @@ async function buildWithRolldown(root: string, entry: string): Promise<BuildOutc
       dir: root,
       entryFileNames: "[name].rolldown.js",
       format: "esm",
+      strictExecutionOrder: options.rolldownStrictExecutionOrder,
     });
 
     return {
@@ -149,30 +175,18 @@ async function executeGenerated(root: string, output: readonly GeneratedOutput[]
   const entry = output.find((item) => "code" in item && item.isEntry);
   if (!entry) throw new Error("Generated output did not contain an entry chunk");
 
-  (globalThis as { __compatLog?: string[] }).__compatLog = [];
-  const namespace = await import(
-    `${pathToFileURL(join(root, entry.fileName)).href}?t=${Date.now()}`
+  const resultPath = join(root, `${entry.fileName}.exports.json`);
+  const runnerPath = join(root, `${entry.fileName}.runner.mjs`);
+  await writeFile(runnerPath, createExecutionRunner());
+  await execFileAsync(
+    process.execPath,
+    [runnerPath, pathToFileURL(join(root, entry.fileName)).href, resultPath],
+    {
+      timeout: executeGeneratedTimeoutMs,
+    },
   );
 
-  return serializeNamespace(namespace);
-}
-
-function serializeNamespace(namespace: Record<string, unknown>): SerializableNamespace {
-  const serialized: SerializableNamespace = {};
-
-  for (const key of Object.keys(namespace).sort()) {
-    const value = namespace[key];
-
-    if (
-      value === null ||
-      typeof value === "number" ||
-      typeof value === "string" ||
-      typeof value === "boolean"
-    )
-      serialized[key] = value;
-  }
-
-  return serialized;
+  return JSON.parse(await readFile(resultPath, "utf8")) as SerializableNamespace;
 }
 
 function summarizeChunks(output: readonly GeneratedOutput[]): ChunkSummary[] {
@@ -229,6 +243,31 @@ function formatError(error: unknown) {
   if (error instanceof Error) return error.message;
 
   return String(error);
+}
+
+function createExecutionRunner() {
+  return `import { writeFile } from "node:fs/promises";
+
+const [entryUrl, resultPath] = process.argv.slice(2);
+globalThis.__compatLog = [];
+const namespace = await import(entryUrl);
+const serialized = {};
+
+for (const key of Object.keys(namespace).sort()) {
+  const value = namespace[key];
+
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    serialized[key] = value;
+  }
+}
+
+await writeFile(resultPath, JSON.stringify(serialized));
+`;
 }
 
 type GeneratedOutput = {

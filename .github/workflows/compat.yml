@@ -1,0 +1,113 @@
+name: compat
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 * * * *"
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Base seed for scheduled/manual fuzzing
+        required: false
+      cases:
+        description: Number of fuzz cases for manual runs
+        required: false
+        default: "250"
+      strict_execution_order:
+        description: Run Rolldown with output.strictExecutionOrder
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: npm install -g vite-plus
+      - run: vp install
+      - run: vp check
+      - run: vp test
+      - run: vp run diff -- --family all --seeds 1
+      - run: vp run check:repl-contract
+
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: npm install -g vite-plus
+      - run: vp install
+      - run: vp run check:repl-contract
+      - name: Run scheduled fuzzing
+        shell: bash
+        run: |
+          mkdir -p artifacts
+
+          if [[ -n "${{ inputs.seed }}" ]]; then
+            BASE_SEED="${{ inputs.seed }}"
+          else
+            BASE_SEED=$((GITHUB_RUN_NUMBER * 1000))
+          fi
+
+          if [[ "${{ github.event.schedule }}" == "17 2 * * *" ]]; then
+            CASES=1000
+            MAX_WIDTH=8
+            MAX_DEPTH=10
+          else
+            CASES="${{ inputs.cases || '250' }}"
+            MAX_WIDTH=6
+            MAX_DEPTH=8
+          fi
+
+          echo "base seed: ${BASE_SEED}" | tee artifacts/run.txt
+          echo "cases: ${CASES}" | tee -a artifacts/run.txt
+          echo "max width: ${MAX_WIDTH}" | tee -a artifacts/run.txt
+          echo "max depth: ${MAX_DEPTH}" | tee -a artifacts/run.txt
+
+          STRICT_ARGS=()
+          if [[ "${{ inputs.strict_execution_order || false }}" == "true" ]]; then
+            STRICT_ARGS+=(--rolldown-strict-execution-order)
+            echo "rolldown strict execution order: true" | tee -a artifacts/run.txt
+          else
+            echo "rolldown strict execution order: false" | tee -a artifacts/run.txt
+          fi
+
+          vp run diff -- \
+            --fuzz \
+            --seed "${BASE_SEED}" \
+            --cases "${CASES}" \
+            --max-width "${MAX_WIDTH}" \
+            --max-depth "${MAX_DEPTH}" \
+            --paths all \
+            "${STRICT_ARGS[@]}" \
+            --out-dir artifacts/failures \
+            --report artifacts/report.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compat-fuzz-${{ github.run_number }}
+          path: artifacts

@@ -5,6 +5,13 @@ import { createAllFixtures, createFixture, type FixtureFamily } from "./fixtures
 import { normalizeModulePathKinds, type FuzzFixtureOptions } from "./fuzzer.ts";
 import { allModulePathKinds } from "./module-helpers.ts";
 import { createReplLinks, type ReplLinks } from "./repl.ts";
+import {
+  createGithubAnnotations,
+  detectDefaultReporterFormat,
+  isReporterFormat,
+  reporterFormats,
+  type ReporterFormat,
+} from "./reporters.ts";
 import { runCompatFixture, writeFixture, type CompatResult } from "./diff.ts";
 import type { ModuleFixture } from "./fixtures.ts";
 
@@ -18,11 +25,15 @@ interface CliOptions {
   cases: number;
   continueOnFail: boolean;
   fuzz: Omit<FuzzFixtureOptions, "seed">;
+  rolldownStrictExecutionOrder: boolean;
+  reporter: ReporterFormat;
   outDir?: string;
   report?: string;
 }
 
-const options = parseArgs(process.argv.slice(2));
+const rawArgs = process.argv.slice(2);
+const options = parseArgs(rawArgs);
+const runMetadata = createRunMetadata(rawArgs);
 const fixtures = Array.from(
   { length: options.family === "fuzz" ? options.cases : options.seeds },
   (_, index) => {
@@ -37,8 +48,15 @@ const fixtures = Array.from(
 let failed = false;
 
 for (const fixture of fixtures) {
-  const result = await runCompatFixture(fixture);
+  const result = await runCompatFixture(fixture, {
+    rolldownStrictExecutionOrder: options.rolldownStrictExecutionOrder,
+  });
   const replLinks = result.matches ? undefined : createFailureReplLinks(fixture);
+  const reportedResult = {
+    ...result,
+    metadata: runMetadata,
+    repl: replLinks,
+  };
   const prefix = result.matches ? "ok" : "fail";
 
   console.log(`${prefix} ${result.fixture}`);
@@ -48,14 +66,21 @@ for (const fixture of fixtures) {
     for (const difference of result.differences) console.log(`  ${difference}`);
     printReplLinks(replLinks);
 
+    let reproPath: string | undefined;
+
     if (options.outDir) {
       const fixtureDir = join(options.outDir, result.fixture);
-      await writeFailure(fixtureDir, fixture, result, replLinks);
+      await writeFailure(fixtureDir, fixture, result, replLinks, runMetadata);
+      reproPath = `${fixtureDir}/REPRO.md`;
       console.log(`  wrote fixture to ${fixtureDir}`);
     }
+
+    printReporterOutput(result, replLinks, reproPath);
+  } else {
+    printReporterOutput(result, replLinks);
   }
 
-  if (options.report) await appendReportLine(options.report, { ...result, repl: replLinks });
+  if (options.report) await appendReportLine(options.report, reportedResult);
 
   if (!result.matches && !options.continueOnFail) break;
 }
@@ -69,6 +94,8 @@ function parseArgs(args: string[]): CliOptions {
     seeds: 1,
     cases: 1,
     continueOnFail: true,
+    rolldownStrictExecutionOrder: false,
+    reporter: detectDefaultReporterFormat(process.env),
     fuzz: {
       maxWidth: 4,
       maxDepth: 4,
@@ -134,6 +161,11 @@ function parseArgs(args: string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--rolldown-strict-execution-order" || arg === "--strict-execution-order") {
+      options.rolldownStrictExecutionOrder = true;
+      continue;
+    }
+
     if (arg === "--out-dir") {
       options.outDir = args[++index];
       if (!options.outDir) throw new Error("--out-dir requires a directory");
@@ -143,6 +175,16 @@ function parseArgs(args: string[]): CliOptions {
     if (arg === "--report") {
       options.report = args[++index];
       if (!options.report) throw new Error("--report requires a file path");
+      continue;
+    }
+
+    if (arg === "--reporter") {
+      const reporter = args[++index];
+      if (!isReporterFormat(reporter))
+        throw new Error(
+          `Unknown reporter "${reporter}". Expected one of: ${reporterFormats.join(", ")}`,
+        );
+      options.reporter = reporter;
       continue;
     }
 
@@ -162,17 +204,21 @@ async function writeFailure(
   fixture: ModuleFixture,
   result: CompatResult,
   replLinks: ReplLinks | undefined,
+  metadata: RunMetadata,
 ) {
   await writeFixture(fixtureDir, fixture);
   await mkdir(fixtureDir, { recursive: true });
   await writeFile(
     `${fixtureDir}/result.json`,
-    `${JSON.stringify({ ...result, repl: replLinks }, null, 2)}\n`,
+    `${JSON.stringify({ ...result, metadata, repl: replLinks }, null, 2)}\n`,
   );
-  await writeFile(`${fixtureDir}/REPRO.md`, createReproMarkdown(result, replLinks));
+  await writeFile(`${fixtureDir}/REPRO.md`, createReproMarkdown(result, replLinks, metadata));
 }
 
-async function appendReportLine(reportPath: string, result: CompatResult & { repl?: ReplLinks }) {
+async function appendReportLine(
+  reportPath: string,
+  result: CompatResult & { metadata: RunMetadata; repl?: ReplLinks },
+) {
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(result)}\n`, { flag: "a" });
 }
@@ -209,6 +255,9 @@ Options:
   --paths <list>       Comma-separated fuzz paths, or "all" (default: all)
   --out-dir <dir>      Write failing generated fixtures and result metadata
   --report <file>      Append one JSON object per case to a JSONL report
+  --reporter <format>  Console reporter: ${reporterFormats.join(" | ")} (default: github in GitHub Actions, otherwise text)
+  --rolldown-strict-execution-order
+                       Run Rolldown with output.strictExecutionOrder enabled
   --continue-on-fail   Keep running after differences (default)
   --stop-on-fail       Stop after the first difference
 
@@ -221,7 +270,32 @@ function createFailureReplLinks(fixture: ModuleFixture) {
   return createReplLinks(fixture, {
     rollupVersion: packageVersion("rollup"),
     rolldownVersion: packageVersion("rolldown"),
+    rolldownStrictExecutionOrder: options.rolldownStrictExecutionOrder,
   });
+}
+
+interface RunMetadata {
+  command: string;
+  args: string[];
+  versions: {
+    rollup?: string;
+    rolldown?: string;
+  };
+  rolldownStrictExecutionOrder: boolean;
+}
+
+function createRunMetadata(args: string[]): RunMetadata {
+  const commandArgs = args[0] === "--" ? args.slice(1) : args;
+
+  return {
+    command: formatCommand(["vp", "run", "diff", "--", ...commandArgs]),
+    args: commandArgs,
+    versions: {
+      rollup: packageVersion("rollup"),
+      rolldown: packageVersion("rolldown"),
+    },
+    rolldownStrictExecutionOrder: options.rolldownStrictExecutionOrder,
+  };
 }
 
 function printReplLinks(replLinks: ReplLinks | undefined) {
@@ -229,6 +303,21 @@ function printReplLinks(replLinks: ReplLinks | undefined) {
 
   printReplLink("rollup", replLinks.rollup);
   printReplLink("rolldown", replLinks.rolldown);
+}
+
+function printReporterOutput(
+  result: CompatResult,
+  replLinks: ReplLinks | undefined,
+  reproPath?: string,
+) {
+  if (options.reporter !== "github") return;
+
+  for (const annotation of createGithubAnnotations(result, runMetadata, {
+    repl: replLinks,
+    reproPath,
+  })) {
+    console.log(annotation);
+  }
 }
 
 function printReplLink(name: string, link: ReplLinks["rollup"]) {
@@ -240,13 +329,29 @@ function printReplLink(name: string, link: ReplLinks["rollup"]) {
   console.log(`  ${name} repl: omitted (${link.reason})`);
 }
 
-function createReproMarkdown(result: CompatResult, replLinks: ReplLinks | undefined) {
+function createReproMarkdown(
+  result: CompatResult,
+  replLinks: ReplLinks | undefined,
+  metadata: RunMetadata,
+) {
   const lines = [
     `# ${result.fixture}`,
     "",
     "## Result",
     "",
     ...result.differences.map((difference) => `- ${difference}`),
+    "",
+    "## Local",
+    "",
+    "```bash",
+    metadata.command,
+    "```",
+    "",
+    "## Versions",
+    "",
+    `- Rollup: ${metadata.versions.rollup ?? "unknown"}`,
+    `- Rolldown: ${metadata.versions.rolldown ?? "unknown"}`,
+    `- Rolldown strict execution order: ${String(metadata.rolldownStrictExecutionOrder)}`,
     "",
     "## Online REPLs",
     "",
@@ -282,4 +387,14 @@ function readPackageJson() {
     devDependencies?: Partial<Record<"rolldown" | "rollup", string>>;
     inlinedDependencies?: Partial<Record<"rolldown" | "rollup", string>>;
   };
+}
+
+function formatCommand(parts: readonly string[]) {
+  return parts.map(shellQuote).join(" ");
+}
+
+function shellQuote(value: string) {
+  if (/^[\w./:=,+-]+$/.test(value)) return value;
+
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }

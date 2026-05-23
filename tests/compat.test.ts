@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { createFuzzFixture } from "../src/fuzzer.ts";
 import { createAllFixtures, createFixture } from "../src/fixtures.ts";
 import { runCompatFixture } from "../src/diff.ts";
+import { createGithubAnnotations, detectDefaultReporterFormat } from "../src/reporters.ts";
 import {
   createReplLinks,
   decodeRolldownHashState,
@@ -80,6 +81,20 @@ describe("repl links", () => {
     expect(Object.values(rolldownState.f).find((file) => file.e)?.n).toBe(fixture.entry);
   });
 
+  test("adds a Rolldown REPL config for strict execution order", () => {
+    const fixture = createFixture({ family: "dense-star", seed: 0 });
+    const links = createReplLinks(fixture, {
+      rolldownStrictExecutionOrder: true,
+    });
+
+    expect(links.rolldown.status).toBe("ok");
+    if (links.rolldown.status !== "ok") return;
+
+    const rolldownState = decodeRolldownHashState(links.rolldown.url.split("#")[1]!);
+    expect(rolldownState.f["rolldown.config.ts"]?.c).toContain("strictExecutionOrder: true");
+    expect(rolldownState.f["rolldown.config.ts"]?.e).toBe(false);
+  });
+
   test("pins upstream URL-state contracts", () => {
     expect(replContractSources.map((source) => source.name)).toEqual([
       "rollup-query-state",
@@ -87,5 +102,52 @@ describe("repl links", () => {
       "rolldown-url-codec",
       "rolldown-source-file-json",
     ]);
+  });
+});
+
+describe("reporters", () => {
+  test("auto-detects the GitHub Actions reporter", () => {
+    expect(detectDefaultReporterFormat({ GITHUB_ACTIONS: "true" })).toBe("github");
+    expect(detectDefaultReporterFormat({ GITHUB_ACTIONS: "false" })).toBe("text");
+    expect(detectDefaultReporterFormat({})).toBe("text");
+  });
+
+  test("formats GitHub Actions warnings and errors", () => {
+    const annotations = createGithubAnnotations(
+      {
+        fixture: "dense,star:0",
+        rollup: {
+          status: "ok",
+          warnings: ["rollup warning with percent %\nand newline"],
+          exports: {},
+          chunks: [],
+        },
+        rolldown: {
+          status: "error",
+          warnings: [],
+          error: "rolldown failed",
+        },
+        options: {
+          rolldownStrictExecutionOrder: false,
+        },
+        matches: false,
+        differences: ["status mismatch: rollup=ok, rolldown=error"],
+      },
+      {
+        command: "vp run diff -- --seed 1",
+      },
+      {
+        reproPath: "artifacts/failures/dense,star:0/REPRO.md",
+      },
+    );
+
+    expect(annotations).toHaveLength(3);
+    expect(annotations[0]).toContain("::warning title=Rollup warning%3A dense%2Cstar%3A0::");
+    expect(annotations[0]).toContain("percent %25%0Aand newline");
+    expect(annotations[1]).toContain(
+      "::error file=artifacts/failures/dense%2Cstar%3A0/REPRO.md,title=Compat mismatch%3A dense%2Cstar%3A0::",
+    );
+    expect(annotations[1]).toContain("status mismatch: rollup=ok, rolldown=error");
+    expect(annotations[2]).toContain("title=Rolldown build error%3A dense%2Cstar%3A0");
   });
 });
